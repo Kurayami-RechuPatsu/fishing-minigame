@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fishing Mini-Game</title>
+    <style>
+        body {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            background-color: #2c3e50;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            color: white;
+            margin: 0;
+            user-select: none; /* Prevent text selection while clicking */
+        }
+
+        h2 { margin-bottom: 10px; }
+        p { color: #bdc3c7; margin-bottom: 20px; }
+
+        /* Main Game Container */
+        .game-wrapper {
+            display: flex;
+            gap: 10px;
+            padding: 10px;
+            background: #34495e;
+            border-radius: 10px;
+            border: 4px solid #2c3e50;
+            box-shadow: 0 10px 20px rgba(0,0,0,0.5);
+        }
+
+        /* The Water Column */
+        .fishing-bar-container {
+            position: relative;
+            width: 60px;
+            height: 400px;
+            background: linear-gradient(to bottom, #4facfe 0%, #00f2fe 100%);
+            border: 3px solid #1a252f;
+            border-radius: 20px;
+            overflow: hidden;
+        }
+
+        /* The Green "Catcher" Bar controlled by player */
+        #catcher-bar {
+            position: absolute;
+            left: 5px;
+            width: 50px;
+            height: 80px; /* Height of the safe zone */
+            background-color: #2ecc71; /* Green */
+            opacity: 0.8;
+            border-radius: 5px;
+            border: 1px solid #27ae60;
+            bottom: 0px; /* Starting position */
+            transition: background-color 0.1s;
+        }
+
+        #catcher-bar.catching {
+            background-color: #4cd137; /* Brighter green when catching */
+            box-shadow: 0 0 10px #4cd137;
+        }
+
+        /* The Fish */
+        #fish {
+            position: absolute;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 30px;
+            height: 30px;
+            font-size: 24px;
+            line-height: 30px;
+            text-align: center;
+            bottom: 20px;
+            transition: bottom 0.1s linear; /* Smooth movement */
+            pointer-events: none;
+        }
+
+        /* The Progress Meter (Right side) */
+        .progress-container {
+            position: relative;
+            width: 20px;
+            height: 400px;
+            background-color: #1a252f;
+            border-radius: 10px;
+            overflow: hidden;
+            border: 2px solid #1a252f;
+        }
+
+        #progress-bar {
+            position: absolute;
+            bottom: 0;
+            width: 100%;
+            height: 30%; /* Start at 30% */
+            background: linear-gradient(to top, #f1c40f, #e67e22);
+            transition: height 0.1s linear, background 0.3s;
+        }
+
+        /* Game Over / Win Messages */
+        #status-msg {
+            margin-top: 20px;
+            font-size: 1.5rem;
+            font-weight: bold;
+            height: 30px;
+        }
+
+        .controls-hint {
+            margin-top: 10px;
+            font-size: 0.9rem;
+            background: rgba(0,0,0,0.3);
+            padding: 5px 10px;
+            border-radius: 5px;
+        }
+    </style>
+</head>
+<body>
+
+    <h2>Fishing Mini-Game</h2>
+    <div class="game-wrapper" 
+         data-reelpower="0.6" 
+         data-baitweight="0.6" 
+         data-progress="0.4" 
+         data-progresspenalty="0.2" 
+         data-progressupdaterate="16">
+        <!-- The Fishing Area -->
+        <div class="fishing-bar-container">
+            <div id="catcher-bar"></div>
+            <div id="fish" 
+                 data-movepremsec="800" 
+                 data-jumprange="100" 
+                 data-speed="1.5" 
+                 data-depth="25">🐟</div>
+        </div>
+
+        <!-- The Success Meter -->
+        <div class="progress-container">
+            <div id="progress-bar"></div>
+        </div>
+    </div>
+
+    <div id="status-msg">Click to Start!</div>
+    <div class="controls-hint">Hold <b>LEFT MOUSE</b> to raise the bar. Release to drop.</div>
+
+    <script>
+        // DOM Elements
+        const catcherElem = document.getElementById('catcher-bar');
+        const fishElem = document.getElementById('fish');
+        const progressElem = document.getElementById('progress-bar');
+        const statusElem = document.getElementById('status-msg');
+        const gameWrapper = document.querySelector('.game-wrapper');
+
+        // Read data attributes
+        const reelPower = parseFloat(gameWrapper.dataset.reelpower) || 0.8;
+        const baitWeight = parseFloat(gameWrapper.dataset.baitweight) || 0.4;
+        const progressGain = parseFloat(gameWrapper.dataset.progress) || 0.4;
+        const progressPenalty = parseFloat(gameWrapper.dataset.progresspenalty) || 0.2;
+        const progressUpdateRate = parseInt(gameWrapper.dataset.progressupdaterate) || 16;
+
+        const movePerMSec = parseInt(fishElem.dataset.movepremsec) || 800;
+        const jumpRangePercent = parseFloat(fishElem.dataset.jumprange) || 100;
+        const fishSpeedData = parseFloat(fishElem.dataset.speed) || 1.5;
+        const depthPercent = parseFloat(fishElem.dataset.depth) || 25;
+
+        // Game Configuration
+        const GAME_HEIGHT = 400;
+        const CATCHER_HEIGHT = 80;
+        const FISH_SIZE = 30;
+        
+        // Physics Variables
+        let catcherPos = 0; // 0 to (GAME_HEIGHT - CATCHER_HEIGHT)
+        let catcherVelocity = 0;
+        const GRAVITY = baitWeight;
+        const LIFT_POWER = reelPower;
+        const BOUNCE = -0.3; // Slight bounce when hitting bottom
+
+        // Fish AI Variables
+        let fishPos = 0;
+        let fishTarget = 0;
+        let fishMoveTimer = 0;
+        const moveTimerThreshold = Math.round(movePerMSec / 16.67); // Approximate frames
+        const jumpRange = (GAME_HEIGHT - FISH_SIZE) * (jumpRangePercent / 100);
+        let fishSpeed = fishSpeedData; // How fast the fish moves to target
+
+        const progressMultiplier = 16.67 / progressUpdateRate;
+
+        // Game State
+        let progress = 30; // 0 to 100
+        let isMouseDown = false;
+        let gameRunning = false;
+        let gameLoopId;
+
+        // Input Handling
+        document.addEventListener('mousedown', () => {
+            if (!gameRunning && (progress <= 0 || progress >= 100)) resetGame();
+            if (!gameRunning) startGame();
+            isMouseDown = true;
+        });
+        document.addEventListener('mouseup', () => isMouseDown = false);
+        
+        // Also support spacebar
+        document.addEventListener('keydown', (e) => {
+            if (e.code === 'Space') {
+                if (!gameRunning && (progress <= 0 || progress >= 100)) resetGame();
+                if (!gameRunning) startGame();
+                isMouseDown = true;
+            }
+        });
+        document.addEventListener('keyup', (e) => {
+            if (e.code === 'Space') isMouseDown = false;
+        });
+
+        function startGame() {
+            gameRunning = true;
+            statusElem.textContent = "Catching...";
+            statusElem.style.color = "white";
+            gameLoop();
+        }
+
+        function resetGame() {
+            progress = 30;
+            catcherPos = 0;
+            fishPos = (depthPercent / 100) * (GAME_HEIGHT - FISH_SIZE);
+            updateVisuals();
+        }
+
+        function gameOver(win) {
+            gameRunning = false;
+            cancelAnimationFrame(gameLoopId);
+            if (win) {
+                statusElem.textContent = "FISH CAUGHT! 🎣";
+                statusElem.style.color = "#2ecc71";
+            } else {
+                statusElem.textContent = "FISH ESCAPED! ❌";
+                statusElem.style.color = "#e74c3c";
+            }
+        }
+
+        function updatePhysics() {
+            // 1. Catcher Physics (Gravity & Lift)
+            if (isMouseDown) {
+                catcherVelocity += LIFT_POWER;
+            } else {
+                catcherVelocity -= GRAVITY;
+            }
+
+            // Apply velocity
+            catcherPos += catcherVelocity;
+
+            // Collision with boundaries (Top/Bottom)
+            const maxPos = GAME_HEIGHT - CATCHER_HEIGHT;
+            
+            if (catcherPos < 0) {
+                catcherPos = 0;
+                catcherVelocity *= BOUNCE; // Bounce off bottom
+                catcherVelocity = 0; // Or just stop
+            } else if (catcherPos > maxPos) {
+                catcherPos = maxPos;
+                catcherVelocity = 0; // Stop at top
+            }
+
+            // 2. Fish AI (Random Movement)
+            fishMoveTimer++;
+            if (fishMoveTimer > moveTimerThreshold) { // Change target based on timing
+                fishMoveTimer = 0;
+                // Move within jump range around current position
+                const offset = (Math.random() - 0.5) * jumpRange;
+                fishTarget = fishPos + offset;
+                // Clamp to bounds
+                fishTarget = Math.max(0, Math.min(GAME_HEIGHT - FISH_SIZE, fishTarget));
+            }
+
+            // Move fish towards target
+            if (fishPos < fishTarget) {
+                fishPos += fishSpeed;
+            } else if (fishPos > fishTarget) {
+                fishPos -= fishSpeed;
+            }
+            
+            // Keep fish in bounds (sanity check)
+            if (fishPos < 0) fishPos = 0;
+            if (fishPos > GAME_HEIGHT - FISH_SIZE) fishPos = GAME_HEIGHT - FISH_SIZE;
+        }
+
+        function checkCollision() {
+            // Check if Fish is inside Catcher Bar
+            // We measure from bottom up in CSS, so logic matches
+            const fishCenter = fishPos + (FISH_SIZE / 2);
+            const catcherBottom = catcherPos;
+            const catcherTop = catcherPos + CATCHER_HEIGHT;
+
+            const isCatching = fishCenter >= catcherBottom && fishCenter <= catcherTop;
+
+            if (isCatching) {
+                progress += progressGain * progressMultiplier; // Fill bar
+                catcherElem.classList.add('catching');
+            } else {
+                progress -= progressPenalty * progressMultiplier; // Drain bar
+                catcherElem.classList.remove('catching');
+            }
+
+            // Clamp progress
+            if (progress < 0) progress = 0;
+            if (progress > 100) progress = 100;
+
+            // Check Win/Loss
+            if (progress >= 100) gameOver(true);
+            if (progress <= 0) gameOver(false);
+        }
+
+        function updateVisuals() {
+            catcherElem.style.bottom = catcherPos + 'px';
+            fishElem.style.bottom = fishPos + 'px';
+            progressElem.style.height = progress + '%';
+
+            // Change progress bar color based on fullness
+            if (progress > 80) progressElem.style.background = "#2ecc71";
+            else if (progress > 40) progressElem.style.background = "#f1c40f";
+            else progressElem.style.background = "#e74c3c";
+        }
+
+        function gameLoop() {
+            if (!gameRunning) return;
+
+            updatePhysics();
+            checkCollision();
+            updateVisuals();
+
+            gameLoopId = requestAnimationFrame(gameLoop);
+        }
+
+        // Initial Render
+        resetGame();
+
+    </script>
+</body>
+</html>
