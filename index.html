@@ -167,12 +167,18 @@
         const CATCHER_HEIGHT = 80;
         const FISH_SIZE = 30;
         
-        // Physics Variables
+        // Physics Variables (acceleration-based Stardew-like feel)
         let catcherPos = 0; // 0 to (GAME_HEIGHT - CATCHER_HEIGHT)
-        let catcherVelocity = 0;
-        const GRAVITY = baitWeight;
-        const LIFT_POWER = reelPower;
-        const BOUNCE = -0.3; // Slight bounce when hitting bottom
+        let catcherVelocity = 0; // px / s
+        let lastTimestamp = null;
+        // Acceleration-based parameters (tuned to feel like Stardew Valley)
+        // Positive velocity = upward movement (increases bottom CSS)
+        // Slower, more weighty values to better match Stardew Valley feel
+        const UP_ACCEL = 1400 * (1 + reelPower * 0.2); // px/s^2 when holding
+        const GRAVITY = 2200 * (1 + baitWeight * 0.2); // px/s^2 when released (pulls bar down)
+        const VELOCITY_DAMPING = 0.992; // stronger damping for a calmer motion
+        const MAX_VELOCITY = 700; // lower cap so movement tops out gentler
+        const BOUNCE = -0.35; // Slight bounce when hitting bottom
 
         // Fish AI Variables
         let fishPos = 0;
@@ -214,12 +220,15 @@
             gameRunning = true;
             statusElem.textContent = "Catching...";
             statusElem.style.color = "white";
-            gameLoop();
+            lastTimestamp = null;
+            gameLoopId = requestAnimationFrame(gameLoop);
         }
 
         function resetGame() {
             progress = 30;
             catcherPos = 0;
+            catcherVelocity = 0;
+            lastTimestamp = null;
             fishPos = (depthPercent / 100) * (GAME_HEIGHT - FISH_SIZE);
             updateVisuals();
         }
@@ -236,27 +245,36 @@
             }
         }
 
-        function updatePhysics() {
-            // 1. Catcher Physics (Gravity & Lift)
-            if (isMouseDown) {
-                catcherVelocity += LIFT_POWER;
-            } else {
-                catcherVelocity -= GRAVITY;
-            }
+        function updatePhysics(dt) {
+            // dt is seconds elapsed since last frame
+            // 1. Catcher Physics (acceleration-based)
+            const acceleration = isMouseDown ? UP_ACCEL : -GRAVITY;
 
-            // Apply velocity
-            catcherPos += catcherVelocity;
+            // Integrate acceleration -> velocity
+            catcherVelocity += acceleration * dt;
+
+            // Gentle damping to avoid jitter and give a "weighty" feel
+            catcherVelocity *= Math.pow(VELOCITY_DAMPING, dt * 60);
+
+            // Clamp velocity
+            catcherVelocity = Math.max(-MAX_VELOCITY, Math.min(MAX_VELOCITY, catcherVelocity));
+
+            // Integrate position
+            catcherPos += catcherVelocity * dt;
 
             // Collision with boundaries (Top/Bottom)
             const maxPos = GAME_HEIGHT - CATCHER_HEIGHT;
-            
+
             if (catcherPos < 0) {
                 catcherPos = 0;
-                catcherVelocity *= BOUNCE; // Bounce off bottom
-                catcherVelocity = 0; // Or just stop
+                // Bounce slightly if moving downwards into the ground
+                if (catcherVelocity < 0) catcherVelocity *= BOUNCE;
+                else catcherVelocity = 0;
+                catcherVelocity *= VELOCITY_DAMPING;
             } else if (catcherPos > maxPos) {
                 catcherPos = maxPos;
-                catcherVelocity = 0; // Stop at top
+                if (catcherVelocity > 0) catcherVelocity = 0;
+                catcherVelocity *= VELOCITY_DAMPING;
             }
 
             // 2. Fish AI (Random Movement)
@@ -319,10 +337,14 @@
             else progressElem.style.background = "#e74c3c";
         }
 
-        function gameLoop() {
+        function gameLoop(timestamp) {
             if (!gameRunning) return;
 
-            updatePhysics();
+            if (!lastTimestamp) lastTimestamp = timestamp;
+            const dt = Math.min(0.05, (timestamp - lastTimestamp) / 1000); // clamp to avoid big jumps
+            lastTimestamp = timestamp;
+
+            updatePhysics(dt);
             checkCollision();
             updateVisuals();
 
